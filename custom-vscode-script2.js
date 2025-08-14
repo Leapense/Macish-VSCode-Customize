@@ -745,6 +745,9 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             applyLiquidGlass(panel, tokens);
 
+            const playerContainer = document.createElement('div');
+            playerContainer.id = 'player-container';
+            panel.appendChild(playerContainer);
             const row = document.createElement('div');
             Object.assign(row.style, {
                 display: 'inline-flex',
@@ -1140,17 +1143,25 @@ document.addEventListener('DOMContentLoaded', () => {
             collapsible.appendChild(addBtn);
             collapsible.appendChild(listBtn);
 
-            // 순서: 이전/재생/다음/제목/볼륨/속도/피치/파일/폴더/목록/접기
-            row.appendChild(prevBtn);
-            row.appendChild(playBtn);
-            row.appendChild(nextBtn);
-            row.appendChild(collapsible);
-            row.appendChild(settingsBtn);
-            row.appendChild(addBtn);
-            //row.appendChild(addDirBtn);
-            row.appendChild(listBtn);
-            row.appendChild(collapseBtn);
+            const standardControls = document.createElement('div');
+            standardControls.id = 'standard-controls';
+            Object.assign(standardControls.style, {
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+            });
 
+            // 순서: 이전/재생/다음/제목/볼륨/속도/피치/파일/폴더/목록/접기
+            standardControls.appendChild(prevBtn);
+            standardControls.appendChild(playBtn);
+            standardControls.appendChild(nextBtn);
+            standardControls.appendChild(collapsible);
+            standardControls.appendChild(settingsBtn);
+            standardControls.appendChild(addBtn);
+            //row.appendChild(addDirBtn);
+            standardControls.appendChild(listBtn);
+            standardControls.appendChild(collapseBtn);
+            row.appendChild(standardControls);
             requestAnimationFrame(() => {
                 collapsible.style.setProperty('--emp-open-w', collapsible.scrollWidth + 'px');
             });
@@ -1163,7 +1174,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             panel.appendChild(row);
             wrap.appendChild(panel);
-            wrap.appendChild(audio);
+            //wrap.appendChild(audio);
             root.appendChild(wrap);
 
             // Playlist panel
@@ -1234,7 +1245,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 wrap.classList.toggle('is-collapsed', collapsed);
                 collapsible.setAttribute('aria-hidden', String(collapsed));
 
-                try { collapsible.inert = collapsed; } catch {}
+                try { collapsible.inert = collapsed; } catch { }
 
                 collapseBtn.textContent = collapsed ? '▣' : '–';
                 collapseBtn.title = collapsed ? '펼치기' : '접기';
@@ -1275,19 +1286,17 @@ document.addEventListener('DOMContentLoaded', () => {
             function removeTrackById(id) {
                 const removeIdx = playlist.findIndex((t) => t.id === id);
                 if (removeIdx === -1) return;
+
                 const wasCurrent = removeIdx === idx;
                 const t = playlist[removeIdx];
+
                 if (t.source === 'local' && t.url && localObjectURLs.has(t.url)) {
                     try { URL.revokeObjectURL(t.url); } catch { }
                     localObjectURLs.delete(t.url);
                 }
                 playlist.splice(removeIdx, 1);
                 if (!playlist.length) {
-                    audio.pause();
-                    audio.removeAttribute('src');
-                    audio.load();
-                    idx = 0;
-                    title.textContent = '재생목록이 비었습니다';
+                    setCurrent(0, false);
                 } else {
                     if (removeIdx < idx) idx -= 1;
                     else if (wasCurrent) idx = clampIndex(idx);
@@ -1297,17 +1306,73 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             function setCurrent(i, autoplay) {
-                if (!playlist.length) return;
+                if (!playlist.length) {
+                    const playerContainer = document.getElementById('player-container');
+                    const standardControls = document.getElementById('standard-controls');
+                    if (playerContainer) playerContainer.innerHTML = '';
+                    if (standardControls) standardControls.style.display = 'inline-flex';
+
+                    audio.pause();
+                    audio.src = '';
+                    title.textContent = '재생목록이 비었습니다.';
+                    updatePlayIcon();
+                    return;
+                }
                 idx = clampIndex(i);
                 localStorage.setItem(STORAGE.idx, String(idx));
                 const t = playlist[idx];
+
+                const playerContainer = document.getElementById('player-container');
+                const standardControls = document.getElementById('standard-controls');
+
+                if (!playerContainer || !standardControls) {
+                    console.error("Player UI (player-container or standard-controls) not found!");
+                    return;
+                }
+
+                playerContainer.innerHTML = '';
+
                 title.textContent = t.title || 'Untitled';
-                audio.src = t.url || '';
-                // 속도/피치 보정 상태 재적용
-                applyRateFromUI();
-                setPitchPreserve(pitchPreserve);
-                if (autoplay) audio.play().catch(() => updatePlayIcon()); else updatePlayIcon();
                 updatePlaylistHighlightsAndProgress();
+
+                if (t.source === 'soundcloud') {
+                    standardControls.style.display = 'none';
+                    audio.pause();
+                    audio.src = '';
+                    let iframeHtml = t.iframe;
+                    if (autoplay) {
+                        const separator = iframeHtml.includes('?') ? '&' : '?';
+                        iframeHtml = iframeHtml.replace('src="', `src="${separator}auto_play=true`);
+                    }
+                    playerContainer.innerHTML = iframeHtml;
+                    playBtn.textContent = '⏸';
+                } else {
+                    standardControls.style.display = 'inline-flex';
+                    playerContainer.appendChild(audio);
+                    
+                    let sourceUrl = t.url;
+                    if (t.source === 'local' && t.file && !t.url) {
+                        sourceUrl = URL.createObjectURL(t.file);
+                        t.url = sourceUrl;
+                        localObjectURLs.add(sourceUrl);
+                    }
+
+                    audio.src = sourceUrl || '';
+                    applyRateFromUI();
+                    setPitchPreserve(pitchPreserve);
+
+                    if (autoplay) {
+                        const playPromise = audio.play();
+                        if (playPromise !== undefined) {
+                            playPromise.catch((e) => {
+                                console.error("오디오 재생 실패:", e);
+                                updatePlayIcon();
+                            });
+                        }
+                    } else {
+                        updatePlayIcon();
+                    }
+                }
             }
             function nextTrack(autoplay) { if (playlist.length) setCurrent(idx + 1, autoplay ?? !audio.paused); }
             function prevTrack() { if (playlist.length) setCurrent(idx - 1, !audio.paused); }
@@ -1351,14 +1416,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         row.style.backgroundColor = 'transparent';
                         row.style.backgroundImage = 'none';
                     }
-                });
-            }
-
-            function highlightCurrent() {
-                const rows = list.querySelectorAll('[data-track-id]');
-                rows.forEach((row) => {
-                    const active = playlist[idx] && row.getAttribute('data-track-id') === playlist[idx].id;
-                    row.style.background = active ? (tokens.hoverBg || (isDark ? '#2a2a2a' : '#f0f0f0')) : 'transparent';
                 });
             }
 
@@ -1465,7 +1522,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             function showAddModal() {
                 if (document.getElementById('custom-add-source-overlay')) return;
-                const ENABLE_YT = false;
+                
                 const overlay = document.createElement('div');
                 overlay.id = 'custom-add-source-overlay';
                 overlay.setAttribute('role', 'dialog');
@@ -1499,7 +1556,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 Object.assign(h.style, { fontSize: '18px', fontWeight: '600', marginBottom: '12px' });
 
                 const desc = document.createElement('div');
-                desc.textContent = '로컬 파일/폴더 또는 URL(YouTube/오디오/라디오)을 추가할 수 있습니다.';
+                desc.textContent = '로컬 파일/폴더를 추가할 수 있습니다.';
                 Object.assign(desc.style, { fontSize: '12px', color: tokens.subtle || '#9da0a2', marginBottom: '12px' });
 
                 const actions = document.createElement('div');
@@ -1524,103 +1581,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     dirPicker.click();
                 });
 
-                const urlRow = document.createElement('div');
-                Object.assign(urlRow.style, { display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px', alignItems: 'center' });
-
-                const urlInput = document.createElement('input');
-                urlInput.type = 'text';
-                urlInput.placeholder = 'https:// ... (YouTube, mp3/ogg/flac, 라디오 스트림 등)';
-                Object.assign(urlInput.style, {
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    border: `1px solid ${tokens.border || 'rgba(255,255,255,0.18)'}`,
-                    background: tokens.bg || (isDark ? '#252526' : '#ffffff'),
-                    color: tokens.fg || '#e6e6e6',
-                    outline: 'none',
-                });
-                urlInput.addEventListener('focus', () => { urlInput.style.boxShadow = `0 0 0 2px ${(tokens.btnBg || '#0e639c')}55`; });
-                urlInput.addEventListener('blur', () => { urlInput.style.boxShadow = 'none'; });
-
-                const btnAddUrl = mkBtn('URL 추가', 'URL 추가');
-                urlRow.appendChild(urlInput);
-                urlRow.appendChild(btnAddUrl);
-
-                const hint = document.createElement('div');
-                hint.innerHTML = '주의: 일부 서버는 CORS를 허용하지 않아 직접 재생이 안 될 수 있습니다. YouTube는 공식 플레이어로만 재생합니다.';
-                Object.assign(hint.style, {fontSize: '11px', color: tokens.subtle || '#9da0a2', marginTop: '6px' });
-
                 const footer = document.createElement('div');
                 Object.assign(footer.style, { display: 'flex', justifyContent: 'flex-end', marginTop: '16px', gap: '8px' });
                 const btnClose = mkBtn('닫기', '닫기');
+                btnClose.addEventListener('click', () => {
+                    close();
+                });
                 footer.appendChild(btnClose);
 
                 modal.appendChild(h);
                 modal.appendChild(desc);
                 modal.appendChild(actions);
-                modal.appendChild(urlRow);
-                modal.appendChild(hint);
                 modal.appendChild(footer);
                 overlay.appendChild(modal);
                 document.body.appendChild(overlay);
 
-                btnAddUrl.addEventListener('click', onAddUrl);
-                urlInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') onAddUrl();
-                });
-
-                function onAddUrl() {
-                    const raw = (urlInput.value || '').trim();
-                    if (!raw) return urlInput.focus();
-                    const wasEmpty = playlist.length === 0;
-
-                    const vid = parseYouTubeId(raw);
-                    if (vid) {
-                        if (ENABLE_YT) {
-                            playlist.push({id: genId(), source: 'youtube', ytId: vid, title: `YouTube · ${vid}` });
-                            renderPlaylist();
-                            if (wasEmpty) setCurrent(0, false);
-                        } else {
-                            window.open(`https://www.youtube.com/watch?v=${vid}`, '_blank', 'noopener');
-                        }
-                        close();
-                        return;
-                    }
-
-                    playlist.push({ id: genId(), source: 'url', url: raw, title: deriveTitleFromUrl(raw) });
-                    renderPlaylist();
-                    if (wasEmpty) setCurrent(0, false);
-                    close();
-                }
-
-                function deriveTitleFromUrl(u) {
-                    try {
-                        const x = new URL(u);
-                        const tail = decodeURIComponent(x.pathname.split('/').filter(Boolean).pop() || '');
-                        if (tail) return tail;
-                        return x.host;
-                    } catch {
-                        return u;
-                    }
-                }
-
-                function parseYouTubeId(u) {
-                    try {
-                        const url = new URL(u);
-                        const h = url.host.replace(/^www\./, '');
-                        if (h === 'youtu.be') return url.pathname.slice(1);
-                        if (h === 'youtube.com') {
-                            if (url.pathname.startsWith('/watch')) return url.searchParams.get('v');
-                            if (url.pathname.startsWith('/embed/')) return url.pathname.split('/').pop();
-                            if (url.pathname.startsWith('/shorts/')) return url.pathname.split('/').pop();
-                            if (url.pathname.startsWith('/live/')) return url.pathname.split('/').pop();
-                        }
-                    } catch {}
-
-                    const m = u.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?.*v=|embed\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/);
-                    return m ? m[1] : null;
-                }
-
-                const focusable = [btnFile, btnFolder, urlInput, btnAddUrl, btnClose];
+                const focusable = [btnFile, btnFolder, btnClose];
                 setTimeout(() => urlInput.focus(), 0);
 
                 function close() {
